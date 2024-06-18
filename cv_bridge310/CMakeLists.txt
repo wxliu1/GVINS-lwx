@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.0.2)
+# cv_bridge加上了版本号，提供了一个范本。以为笔记
 project(cv_bridge310)
 
 find_package(catkin REQUIRED COMPONENTS rosconsole sensor_msgs)
 
 if(NOT ANDROID)
   find_package(PythonLibs)
-
+  # 注释了以下多行才能编译通过2024-6-18.
   # if(PYTHONLIBS_VERSION_STRING VERSION_LESS "3.8")
   #   # Debian Buster
   #   find_package(Boost REQUIRED python37)
@@ -39,6 +40,7 @@ endif()
 # the end.
 
 # find_package(OpenCV ${_opencv_version} REQUIRED
+# 这里只需要把opencv的版本改成机器上对应的版本即可
 # change this line on 2024-6-17
 find_package(OpenCV 3.1.0 REQUIRED
   COMPONENTS
