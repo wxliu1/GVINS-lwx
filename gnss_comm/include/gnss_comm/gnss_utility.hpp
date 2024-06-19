@@ -295,6 +295,7 @@ namespace gnss_comm
     *-----------------------------------------------------------------------------*/
     Eigen::Matrix3d ecef2rotation(const Eigen::Vector3d &ref_ecef);
 
+    // troposphere [ˈtrɒpəsfɪə(r)] 对流层  ionosphere [aɪˈɒnəsfɪə(r)] 电离层
     /* calculate signal delay caused by troposphere ------------------------------
     * calculate signal delay caused by troposphere
     * args   : gtime_t time                 I   time (gpst)

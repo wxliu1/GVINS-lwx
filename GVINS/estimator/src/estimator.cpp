@@ -229,8 +229,10 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
     }
 }
 
+// 星历信息的输入
 void Estimator::inputEphem(EphemBasePtr ephem_ptr)
 {
+    // 转换成double类型的总秒数：秒的整数部分 + 小数部分
     double toe = time2sec(ephem_ptr->toe);
     // if a new ephemeris comes
     if (sat2time_index.count(ephem_ptr->sat) == 0 || sat2time_index.at(ephem_ptr->sat).count(toe) == 0)
@@ -245,7 +247,9 @@ void Estimator::inputIonoParams(double ts, const std::vector<double> &iono_param
     if (iono_params.size() != 8)    return;
 
     // update ionosphere parameters
+    // 先清空最近的数据
     latest_gnss_iono_params.clear();
+    // 不断更新电离层的参数
     std::copy(iono_params.begin(), iono_params.end(), std::back_inserter(latest_gnss_iono_params));
 }
 
@@ -254,26 +258,33 @@ void Estimator::inputGNSSTimeDiff(const double t_diff)
     diff_t_gnss_local = t_diff;
 }
 
+// 根据一定的条件，获取可用的GNSS观测值数据
 void Estimator::processGNSS(const std::vector<ObsPtr> &gnss_meas)
 {
-    std::vector<ObsPtr> valid_meas;
-    std::vector<EphemBasePtr> valid_ephems;
+    std::vector<ObsPtr> valid_meas; // 有用的测量数据
+    std::vector<EphemBasePtr> valid_ephems; // 有用的星历数据
+    // 遍历所有的GNSS测量数据，得到有用信息
     for (auto obs : gnss_meas)
     {
+        // Step 1：确定当前导航系统
         // filter according to system
         uint32_t sys = satsys(obs->sat, NULL);
         if (sys != SYS_GPS && sys != SYS_GLO && sys != SYS_GAL && sys != SYS_BDS)
             continue;
 
+        // Step 2：确定当前时刻观测到的卫星数量
         // if not got cooresponding ephemeris yet
         if (sat2ephem.count(obs->sat) == 0)
             continue;
         
+        // Step 3：如果观测数据中频率值不为空，选择L1频率，并确定相应的观测值和星历信息
         if (obs->freqs.empty())    continue;       // no valid signal measurement
         int freq_idx = -1;
         L1_freq(obs, &freq_idx);
         if (freq_idx < 0)   continue;              // no L1 observation
         
+        // Step 4：根据星历的参数时间toe，判断当前星历参数是否有效
+        // 一般认为当前的GPS时间在星历参考时间前后的2小时之内（即7200秒之内），这套星历参数被认为是有效的
         double obs_time = time2sec(obs->time);
         std::map<double, size_t> time2index = sat2time_index.at(obs->sat);
         double ephem_time = EPH_VALID_SECONDS;
@@ -286,15 +297,19 @@ void Estimator::processGNSS(const std::vector<ObsPtr> &gnss_meas)
                 ephem_index = ti.second;
             }
         }
-        if (ephem_time >= EPH_VALID_SECONDS)
+        if (ephem_time >= EPH_VALID_SECONDS) // 超过7200秒，丢弃
         {
             cerr << "ephemeris not valid anymore\n";
             continue;
         }
         const EphemBasePtr &best_ephem = sat2ephem.at(obs->sat).at(ephem_index);
 
+        // Step 5：根据卫星的跟踪状态和伪距、多普勒测量的标准差，判断该测量数据的合法性
         // filter by tracking status
         LOG_IF(FATAL, freq_idx < 0) << "No L1 observation found.\n";
+        // psr_std：伪距标准差
+        // dopp_std：多普勒标准差
+        // 如果伪距和多普勒测量中任一数据的标准差超过了规定数值，认为当前测量值不OK，并将当前测量值下的卫星被跟踪（被观测）次数状态归零
         if (obs->psr_std[freq_idx]  > GNSS_PSR_STD_THRES ||
             obs->dopp_std[freq_idx] > GNSS_DOPP_STD_THRES)
         {
@@ -305,13 +320,15 @@ void Estimator::processGNSS(const std::vector<ObsPtr> &gnss_meas)
         {
             if (sat_track_status.count(obs->sat) == 0)
                 sat_track_status[obs->sat] = 0;
-            ++ sat_track_status[obs->sat];
+            ++ sat_track_status[obs->sat]; // 跟踪（观测）次数+1
         }
+        // 跟踪状态没有达到要求
         if (sat_track_status[obs->sat] < GNSS_TRACK_NUM_THRES)
             continue;           // not being tracked for enough epochs
 
+        // Step 6：根据观测卫星的仰角
         // filter by elevation angle
-        if (gnss_ready)
+        if (gnss_ready) // 当GNSSVIAlign()对齐之后，gnss_ready为true
         {
             Eigen::Vector3d sat_ecef;
             if (sys == SYS_GLO)
@@ -319,14 +336,15 @@ void Estimator::processGNSS(const std::vector<ObsPtr> &gnss_meas)
             else
                 sat_ecef = eph2pos(obs->time, std::dynamic_pointer_cast<Ephem>(best_ephem), NULL);
             double azel[2] = {0, M_PI/2.0};
-            sat_azel(ecef_pos, sat_ecef, azel);
-            if (azel[1] < GNSS_ELEVATION_THRES*M_PI/180.0)
+            sat_azel(ecef_pos, sat_ecef, azel); // 通过ENU坐标系下，接收机位置和卫星位置的向量差，可求出仰角
+            if (azel[1] < GNSS_ELEVATION_THRES*M_PI/180.0) // GNSS_ELEVATION_THRES=30度，要求仰角不能小于30度
                 continue;
         }
         valid_meas.push_back(obs);
         valid_ephems.push_back(best_ephem);
     }
     
+    // Step 7：将条件较好的卫星观测数据和星历信息放到全局变量中
     gnss_meas_buf[frame_count] = valid_meas;
     gnss_ephem_buf[frame_count] = valid_ephems;
 }
@@ -555,31 +573,42 @@ bool Estimator::visualInitialAlign()
     return true;
 }
 
+// @brief GNSS和VIO进行联合优化，在VIO初始化完成之后
 bool Estimator::GNSSVIAlign()
 {
+    // Step 1：根据系统当前状态和GNSS观测数据量，判断是否能够进行GNSS和VIO的对齐
+    // 在VIO完成初始化之后，才能进行GNSS和VIO的对齐，否则直接退出返回false
     if (solver_flag == INITIAL)     // visual-inertial not initialized
         return false;
     
+    // 如果已经完成GNSS和VIO的对齐，直接退出返回true
     if (gnss_ready)                 // GNSS-VI already initialized
         return true;
     
+    // 如果GNSS的观测数据为空或者每帧对应下的观测数据数量太少（小于10），直接退出返回false，不继续进行对齐
     for (uint32_t i = 0; i < (WINDOW_SIZE+1); ++i)
     {
         if (gnss_meas_buf[i].empty() || gnss_meas_buf[i].size() < 10)
             return false;
     }
 
+    // Step 2：检测水平方向的速度激励: 速度取前2维，即水平面上的速度。
     // check horizontal velocity excitation
     Eigen::Vector2d avg_hor_vel(0.0, 0.0);
     for (uint32_t i = 0; i < (WINDOW_SIZE+1); ++i)
-        avg_hor_vel += Vs[i].head<2>().cwiseAbs();
-    avg_hor_vel /= (WINDOW_SIZE+1);
-    if (avg_hor_vel.norm() < 0.3)
+        avg_hor_vel += Vs[i].head<2>().cwiseAbs(); // 不在乎速度的正负（对于矢量，即方向），考虑绝对数值
+    avg_hor_vel /= (WINDOW_SIZE+1); //当前滑窗中， 水平方向上的速度平均值
+    if (avg_hor_vel.norm() < 0.3) // 如果平均速度的模小于0.3，认为速度激励不够
     {
+        // 在GNSS论文中有提到，将行人正常移动的平均速度认为是0.3m/s
+        // 应该是从这个数值入手，判断当前手持设备是否正常移动
+        // 一旦GNSS接收器的速度低于多普勒频移的噪声水平，估计的偏航偏移就可能被测量噪声破坏。
+        // 此外，低速移动还意味着窗口内的平移距离较短，因此偏航估计也可能受到代码伪距的影响
         std::cerr << "velocity excitation not enough for GNSS-VI alignment.\n";
         return false;
     }
 
+    // 获取当前窗口内的GNSS观测数据和星历数据
     std::vector<std::vector<ObsPtr>> curr_gnss_meas_buf;
     std::vector<std::vector<EphemBasePtr>> curr_gnss_ephem_buf;
     for (uint32_t i = 0; i < (WINDOW_SIZE+1); ++i)
@@ -588,8 +617,10 @@ bool Estimator::GNSSVIAlign()
         curr_gnss_ephem_buf.push_back(gnss_ephem_buf[i]);
     }
 
+    // Step 3：正式进行GNSS和VIO的对齐
     GNSSVIInitializer gnss_vi_initializer(curr_gnss_meas_buf, curr_gnss_ephem_buf, latest_gnss_iono_params);
 
+    // Step 3.1：得到接收器的一个在ECEF系下的粗糙伪距位置和四个导航系统中卫星的时钟钟差
     // 1. get a rough global location
     Eigen::Matrix<double, 7, 1> rough_xyzt;
     rough_xyzt.setZero();
@@ -599,13 +630,15 @@ bool Estimator::GNSSVIAlign()
         return false;
     }
 
+    // Step 3.2：local world frame和ENU系的对齐，即yaw的求解，毕竟这两个坐标系的Z轴是完完全全重合的
+    // 使用多普勒测量，比伪距测量精度高一个数量级
     // 2. perform yaw alignment
-    std::vector<Eigen::Vector3d> local_vs;
+    std::vector<Eigen::Vector3d> local_vs; // local world frame中的速度。计算得是从body 相对于 local world 的速度
     for (uint32_t i = 0; i < (WINDOW_SIZE+1); ++i)
         local_vs.push_back(Vs[i]);
-    Eigen::Vector3d rough_anchor_ecef = rough_xyzt.head<3>();
-    double aligned_yaw = 0;
-    double aligned_rcv_ddt = 0;
+    Eigen::Vector3d rough_anchor_ecef = rough_xyzt.head<3>(); // 接收机在ECEF下的粗糙位置
+    double aligned_yaw = 0; // 待校正的yaw角
+    double aligned_rcv_ddt = 0; // 接收机时钟钟差变化率
     if (!gnss_vi_initializer.yaw_alignment(local_vs, rough_anchor_ecef, aligned_yaw, aligned_rcv_ddt))
     {
         std::cerr << "Fail to align ENU and local frames.\n";
@@ -613,11 +646,12 @@ bool Estimator::GNSSVIAlign()
     }
     // std::cout << "aligned_yaw is " << aligned_yaw*180.0/M_PI << '\n';
 
+    // Step 3.3：锚点位置重优化
     // 3. perform anchor refinement
-    std::vector<Eigen::Vector3d> local_ps;
+    std::vector<Eigen::Vector3d> local_ps; // VIO在local world frame的位置
     for (uint32_t i = 0; i < (WINDOW_SIZE+1); ++i)
         local_ps.push_back(Ps[i]);
-    Eigen::Matrix<double, 7, 1> refined_xyzt;
+    Eigen::Matrix<double, 7, 1> refined_xyzt; // anchor point位置和四个导航的卫星钟差
     refined_xyzt.setZero();
     if (!gnss_vi_initializer.anchor_refinement(local_ps, aligned_yaw, 
         aligned_rcv_ddt, rough_xyzt, refined_xyzt))
@@ -629,7 +663,7 @@ bool Estimator::GNSSVIAlign()
     //           << refined_xyzt.head<3>().transpose() << '\n';
 
     // restore GNSS states
-    uint32_t one_observed_sys = static_cast<uint32_t>(-1);
+    uint32_t one_observed_sys = static_cast<uint32_t>(-1); // 被观测到的导航系统
     for (uint32_t k = 0; k < 4; ++k)
     {
         if (rough_xyzt(k+3) != 0)
@@ -858,6 +892,8 @@ bool Estimator::failureDetection()
     return false;
 }
 
+// 后端估计器非线性优化部分，需特别关注GNSS部分
+// GNSS部分可进行非线性优化，前提是完成GNSS和VIO的对齐，即gnss_ready = true
 void Estimator::optimization()
 {
     ceres::Problem problem;
@@ -887,34 +923,35 @@ void Estimator::optimization()
         problem.AddParameterBlock(para_Td[0], 1);
     }
 
+    // GNSS部分的待优化量
     if (gnss_ready)
     {
-        problem.AddParameterBlock(para_yaw_enu_local, 1);
+        problem.AddParameterBlock(para_yaw_enu_local, 1); // ENU系和local world系的偏航角
         Eigen::Vector2d avg_hor_vel(0.0, 0.0);
         for (uint32_t i = 0; i <= WINDOW_SIZE; ++i)
             avg_hor_vel += Vs[i].head<2>().cwiseAbs();
-        avg_hor_vel /= (WINDOW_SIZE+1);
+        avg_hor_vel /= (WINDOW_SIZE+1); // x-y平面，或称之为水平面的平均速度
         // cerr << "avg_hor_vel is " << avg_vel << endl;
-        if (avg_hor_vel.norm() < 0.3)
+        if (avg_hor_vel.norm() < 0.3) // 水平面速度激励是否足够
         {
             // std::cerr << "velocity excitation not enough, fix yaw angle.\n";
-            problem.SetParameterBlockConstant(para_yaw_enu_local);
+            problem.SetParameterBlockConstant(para_yaw_enu_local); // 如果不OK，则不优化偏航角，认为是常值
         }
 
         for (uint32_t i = 0; i <= WINDOW_SIZE; ++i)
         {
             if (gnss_meas_buf[i].size() < 10)
-                problem.SetParameterBlockConstant(para_yaw_enu_local);
+                problem.SetParameterBlockConstant(para_yaw_enu_local); // 如果GNSS观测数据不够，也认为偏航角是常值
         }
         
-        problem.AddParameterBlock(para_anc_ecef, 3);
+        problem.AddParameterBlock(para_anc_ecef, 3); // anchor point的位置
         // problem.SetParameterBlockConstant(para_anc_ecef);
 
         for (uint32_t i = 0; i <= WINDOW_SIZE; ++i)
         {
             for (uint32_t k = 0; k < 4; ++k)
-                problem.AddParameterBlock(para_rcv_dt+i*4+k, 1);
-            problem.AddParameterBlock(para_rcv_ddt+i, 1);
+                problem.AddParameterBlock(para_rcv_dt+i*4+k, 1); // 钟差
+            problem.AddParameterBlock(para_rcv_ddt+i, 1); // 钟差变化率
         }
     }
 
@@ -950,11 +987,11 @@ void Estimator::optimization()
 
     if (gnss_ready)
     {
-        for(int i = 0; i <= WINDOW_SIZE; ++i)
+        for(int i = 0; i <= WINDOW_SIZE; ++i) // GNSS约束和IMU约束一样，也是帧和帧之间形成约束
         {
             // cerr << "size of gnss_meas_buf[" << i << "] is " << gnss_meas_buf[i].size() << endl;
-            const std::vector<ObsPtr> &curr_obs = gnss_meas_buf[i];
-            const std::vector<EphemBasePtr> &curr_ephem = gnss_ephem_buf[i];
+            const std::vector<ObsPtr> &curr_obs = gnss_meas_buf[i]; // 卫星观测数据（在前端processGNSS函数中处理后，现gnss_meas_buf里面存储得全是vaild data）
+            const std::vector<EphemBasePtr> &curr_ephem = gnss_ephem_buf[i]; // 星历数据
 
             for (uint32_t j = 0; j < curr_obs.size(); ++j)
             {

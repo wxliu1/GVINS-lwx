@@ -23,6 +23,17 @@ using namespace gnss_comm;
 **  parameters[7]: anchor point's ECEF coordinate
 **  
  */
+/**
+ * 2：残差是2维，包括伪距和多普勒测量残差
+ * 7：k时刻位置p和旋转q，一共7维
+ * 9：k时刻速度、加速度计和陀螺仪的9维偏置
+ * 7：k+1时刻位置p和旋转q，一共7维
+ * 9：k+1时刻速度、加速度计和陀螺仪的9维偏置
+ * 1：接收机时钟钟差
+ * 1：接收机时钟钟差变化率
+ * 1：ENU系和local world系之间的偏航角
+ * 3：anchor point在ECEF下的3D位置
+ * **/
 class GnssPsrDoppFactor : public ceres::SizedCostFunction<2, 7, 9, 7, 9, 1, 1, 1, 3>
 {
     public: 

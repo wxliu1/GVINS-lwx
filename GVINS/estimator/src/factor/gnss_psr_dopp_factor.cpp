@@ -1,5 +1,6 @@
 #include "gnss_psr_dopp_factor.hpp"
 
+// GNSS伪距和多普勒测量因子
 GnssPsrDoppFactor::GnssPsrDoppFactor(const ObsPtr &_obs, const EphemBasePtr &_ephem, 
     std::vector<double> &_iono_paras, const double _ratio) 
         : obs(_obs), ephem(_ephem), iono_paras(_iono_paras), ratio(_ratio)
@@ -58,7 +59,7 @@ bool GnssPsrDoppFactor::Evaluate(double const *const *parameters, double *residu
     double yaw_diff = parameters[6][0];
     Eigen::Vector3d ref_ecef(parameters[7][0], parameters[7][1], parameters[7][2]);
 
-    const Eigen::Vector3d local_pos = ratio*Pi + (1.0-ratio)*Pj;
+    const Eigen::Vector3d local_pos = ratio*Pi + (1.0-ratio)*Pj;// 因为GNSS数据的时间戳和Image时间戳并不是完全对上的，所以这里应该是使用一个比列插值，得到用于GNSS优化的local_pos
     const Eigen::Vector3d local_vel = ratio*Vi + (1.0-ratio)*Vj;
 
     double sin_yaw_diff = std::sin(yaw_diff);
@@ -94,12 +95,14 @@ bool GnssPsrDoppFactor::Evaluate(double const *const *parameters, double *residu
     double psr_estimated = rcv2sat_ecef.norm() + psr_sagnac + rcv_dt - svdt*LIGHT_SPEED + 
                                 ion_delay + tro_delay + tgd*LIGHT_SPEED;
     
+    // 伪距测量误差
     residuals[0] = (psr_estimated - obs->psr[freq_idx]) * pr_weight;
 
     const double dopp_sagnac = EARTH_OMG_GPS/LIGHT_SPEED*(sv_vel(0)*P_ecef(1)+
             sv_pos(0)*V_ecef(1) - sv_vel(1)*P_ecef(0) - sv_pos(1)*V_ecef(0));
     double dopp_estimated = (sv_vel - V_ecef).dot(rcv2sat_unit) + dopp_sagnac + rcv_ddt - svddt*LIGHT_SPEED;
     const double wavelength = LIGHT_SPEED / freq;
+    // 多普勒测量误差
     residuals[1] = (dopp_estimated + obs->dopp[freq_idx]*wavelength) * dp_weight;
 
     if (jacobians)
@@ -109,7 +112,7 @@ bool GnssPsrDoppFactor::Evaluate(double const *const *parameters, double *residu
         {
             Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> J_Pi(jacobians[0]);
             J_Pi.setZero();
-            J_Pi.topLeftCorner<1, 3>() = -rcv2sat_unit.transpose() * R_ecef_local * pr_weight * ratio;
+            J_Pi.topLeftCorner<1, 3>() = -rcv2sat_unit.transpose() * R_ecef_local * pr_weight * ratio; // 伪距误差部分对Pi的导数
 
             const double norm3 = pow(rcv2sat_ecef.norm(), 3);
             const double norm2 = rcv2sat_ecef.squaredNorm();
@@ -125,7 +128,7 @@ bool GnssPsrDoppFactor::Evaluate(double const *const *parameters, double *residu
                 }
             }
             unit2rcv_pos *= -1;
-            J_Pi.bottomLeftCorner<1, 3>() = (sv_vel-V_ecef).transpose() * unit2rcv_pos * 
+            J_Pi.bottomLeftCorner<1, 3>() = (sv_vel-V_ecef).transpose() * unit2rcv_pos * // 多普勒测量部分对Pi的导数
                 R_ecef_local * dp_weight * ratio;
         }
 

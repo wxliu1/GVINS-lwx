@@ -13,6 +13,9 @@ find_package(catkin REQUIRED COMPONENTS
 
 # find_package(Boost REQUIRED COMPONENTS filesystem program_options system)
 # ubuntu20.04安装ros会安装boost1.71.0版本
+# 由于我机器上手动安装了boost1.70.0, 导致如下警告：
+# warning: libboost_filesystem.so.1.71.0, needed by /opt/ros/noetic/lib/libroscpp.so, may conflict with libboost_filesystem.so.1.70.0
+# 因此这里指定boost具体版本号为1.71.0,警告就解决了。
 find_package(Boost 1.71.0 REQUIRED COMPONENTS filesystem program_options system)
 include_directories(${Boost_INCLUDE_DIRS})
 

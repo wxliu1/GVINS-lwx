@@ -113,21 +113,28 @@ void update()
 
 }
 
+// 根据时间戳检测传感器数据的合法性
 bool
 getMeasurements(std::vector<sensor_msgs::ImuConstPtr> &imu_msg, sensor_msgs::PointCloudConstPtr &img_msg, std::vector<ObsPtr> &gnss_msg)
 {
+    // Step 1：当IMU、图像和GNSS中只要有一个数据缓存器为空，那么直接返回false
     if (imu_buf.empty() || feature_buf.empty() || (GNSS_ENABLE && gnss_meas_buf.empty()))
         return false;
     
+    // Step 2：将IMU和图像的时间戳尽量对齐
+    // front_feature_ts 是指当前feature buf中第一帧图像的时间戳 ——> 没有采用td的时间补偿
     double front_feature_ts = feature_buf.front()->header.stamp.toSec();
 
+    // 如果当前IMU最后一个数据的时间戳 不 大于第一帧图像的时间戳，那么需要等待IMU数据
     if (!(imu_buf.back()->header.stamp.toSec() > front_feature_ts))
     {
         //ROS_WARN("wait for imu, only should happen at the beginning");
         sum_of_wait++;
         return false;
     }
+    // front_imu_s 是指当前IMU数据缓存器中第一个IMU数据的时间戳
     double front_imu_ts = imu_buf.front()->header.stamp.toSec();
+    // 当图像缓存器不为空，且front_imu_ts大于front_feature_ts，说明需要丢弃部分图像帧数据
     while (!feature_buf.empty() && front_imu_ts > front_feature_ts)
     {
         ROS_WARN("throw img, only should happen at the beginning");
@@ -135,10 +142,14 @@ getMeasurements(std::vector<sensor_msgs::ImuConstPtr> &imu_msg, sensor_msgs::Poi
         front_feature_ts = feature_buf.front()->header.stamp.toSec();
     }
 
+    // Step 3：将GNSS数据和图像的时间对齐-因为IMU和图像已经基本对齐，再对齐图像和GNSS数据，那么就实现了IMU、图像、GNSS三者之间的对齐
     if (GNSS_ENABLE)
     {
-        front_feature_ts += time_diff_gnss_local;
+        front_feature_ts += time_diff_gnss_local; // 用time_diff_gnss_local修正图像帧的时间戳
         double front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
+        // front_gnss_ts：GNSS数据缓存器中第一个数据的时间戳
+        // front_feature_ts-MAX_GNSS_CAMERA_DELAY：直接考虑GNSS和相机触发时间之间最大的延时MAX_GNSS_CAMERA_DELAY
+        // 如果front_gnss_ts < front_feature_ts-MAX_GNSS_CAMERA_DELAY，那么说明GNSS中包含过旧的数据，直接丢弃
         while (!gnss_meas_buf.empty() && front_gnss_ts < front_feature_ts-MAX_GNSS_CAMERA_DELAY)
         {
             ROS_WARN("throw gnss, only should happen at the beginning");
@@ -146,6 +157,7 @@ getMeasurements(std::vector<sensor_msgs::ImuConstPtr> &imu_msg, sensor_msgs::Poi
             if (gnss_meas_buf.empty()) return false;
             front_gnss_ts = time2sec(gnss_meas_buf.front()[0]->time);
         }
+        // 无GNSS数据，Step 1中其实已经加以判断，这里再次判断是因为有可能删除旧的数据后，导致gnss_meas_buf队列为空
         if (gnss_meas_buf.empty())
         {
             ROS_WARN("wait for gnss...");
@@ -153,7 +165,9 @@ getMeasurements(std::vector<sensor_msgs::ImuConstPtr> &imu_msg, sensor_msgs::Poi
         }
         else if (abs(front_gnss_ts-front_feature_ts) < MAX_GNSS_CAMERA_DELAY)
         {
-            gnss_msg = gnss_meas_buf.front();
+            // 如果GNSS第一个数据的时间戳和修正后的第一帧图像时间戳之间的差之在MAX_GNSS_CAMERA_DELAY范围内，不满足上述while的循环条件，所以无法丢弃
+            // 保存第一个GNSS数据，并将其从缓存器中丢弃
+            gnss_msg = gnss_meas_buf.front(); // 保存gnss测量数据到gnss_msg
             gnss_meas_buf.pop();
         }
     }
@@ -198,18 +212,27 @@ void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
     }
 }
 
+// GNSS星历-回调函数：除GLONASS之外的其它三个卫星系统的星历回调函数
 void gnss_ephem_callback(const GnssEphemMsgConstPtr &ephem_msg)
 {
     EphemPtr ephem = msg2ephem(ephem_msg);
     estimator_ptr->inputEphem(ephem);
 }
 
+// GLONASS星历-回调函数
 void gnss_glo_ephem_callback(const GnssGloEphemMsgConstPtr &glo_ephem_msg)
 {
     GloEphemPtr glo_ephem = msg2glo_ephem(glo_ephem_msg);
     estimator_ptr->inputEphem(glo_ephem);
 }
 
+// 电离层参数订阅 ionospheric
+// troposphere [ˈtrɒpəsfɪə(r)] 对流层  ionosphere [aɪˈɒnəsfɪə(r)] 电离层
+/*
+卫星信号在传播的过程中会受到电离层和对流层的影响，且如果建模不正确或不考虑两者的影响，会导致定位结果变差，
+因此，通常都会对两者进行建模处理；后面我们在选择卫星信号时，会考虑卫星的仰角，也是因为对于仰角小的卫星，
+其信号在电离层和对流层中经过的时间较长，对定位影响大，这样的卫星我们就会排除。
+*/
 void gnss_iono_params_callback(const StampedFloat64ArrayConstPtr &iono_msg)
 {
     double ts = iono_msg->header.stamp.toSec();
@@ -219,8 +242,10 @@ void gnss_iono_params_callback(const StampedFloat64ArrayConstPtr &iono_msg)
     estimator_ptr->inputIonoParams(ts, iono_params);
 }
 
+// 订阅GNSS measurements （伪距、多普勒频率等）
 void gnss_meas_callback(const GnssMeasMsgConstPtr &meas_msg)
 {
+    // 从ros信息解析GNSS测量值
     std::vector<ObsPtr> gnss_meas = msg2meas(meas_msg);
 
     latest_gnss_time = time2sec(gnss_meas[0]->time);
@@ -229,7 +254,7 @@ void gnss_meas_callback(const GnssMeasMsgConstPtr &meas_msg)
     if (!time_diff_valid)   return;
 
     m_buf.lock();
-    gnss_meas_buf.push(std::move(gnss_meas));
+    gnss_meas_buf.push(std::move(gnss_meas)); // 得到GNSS观测值的秒时间，并把观测信息放在全局变量gnss_meas_buf里面，供后面使用
     m_buf.unlock();
     con.notify_one();
 }
@@ -261,6 +286,11 @@ void feature_callback(const sensor_msgs::PointCloudConstPtr &feature_msg)
     }
 }
 
+// 订阅相机触发时间
+/*获得local 和 GNSS的时间差；
+   trigger_msg记录的是相机被GNSS脉冲触发的时间，也可以理解成图像的命名（以时间命名），和真正的GNSS时间是有差别的
+   因为存在硬件延迟等，这也是后面为什么校正local 和 world时间的原因
+*/
 void local_trigger_info_callback(const gvins::LocalSensorExternalTriggerConstPtr &trigger_msg)
 {
     std::lock_guard<std::mutex> lg(m_time);
@@ -325,8 +355,9 @@ void process()
         std::vector<std::pair<std::vector<sensor_msgs::ImuConstPtr>, sensor_msgs::PointCloudConstPtr>> measurements;
         std::vector<sensor_msgs::ImuConstPtr> imu_msg;
         sensor_msgs::PointCloudConstPtr img_msg;
-        std::vector<ObsPtr> gnss_msg;
+        std::vector<ObsPtr> gnss_msg; // GNSS观测数据
 
+        // 获得三者的观测信息，为融合准备
         std::unique_lock<std::mutex> lk(m_buf);
         con.wait(lk, [&]
                  {
@@ -356,7 +387,7 @@ void process()
                 //printf("imu: dt:%f a: %f %f %f w: %f %f %f\n",dt, dx, dy, dz, rx, ry, rz);
 
             }
-            else
+            else // t > img_t 时加速度和角速度进行线性分配
             {
                 double dt_1 = img_t - current_time;
                 double dt_2 = t - img_t;
@@ -377,6 +408,7 @@ void process()
             }
         }
 
+        // GNSS 信息可用时，处理GNSS数据
         if (GNSS_ENABLE && !gnss_msg.empty())
             estimator_ptr->processGNSS(gnss_msg);
 
@@ -449,6 +481,7 @@ int main(int argc, char **argv)
     else
         skip_parameter = 0;
 
+    // subscriber参数详解：topic-订阅的节点名；queue_size-待处理信息队列大小；callback-回调函数
     ros::Subscriber sub_imu = n.subscribe(IMU_TOPIC, 2000, imu_callback, ros::TransportHints().tcpNoDelay());
     ros::Subscriber sub_feature = n.subscribe("/gvins_feature_tracker/feature", 2000, feature_callback);
     ros::Subscriber sub_restart = n.subscribe("/gvins_feature_tracker/restart", 2000, restart_callback);
@@ -459,7 +492,7 @@ int main(int argc, char **argv)
      * 该系统最早开发于苏联时期，后由俄罗斯继续该计划。
      */
 
-    // 订阅GNSS信息
+    // 订阅GNSS信息: 注意GNSS相关的ros话题，根据gnss厂家不一样，属于自定义消息结构，相关定义部分参见gnss_comm.
     ros::Subscriber sub_ephem, sub_glo_ephem, sub_gnss_meas, sub_gnss_iono_params;
     ros::Subscriber sub_gnss_time_pluse_info, sub_local_trigger_info;
     if (GNSS_ENABLE)
@@ -469,15 +502,24 @@ int main(int argc, char **argv)
         // 订阅星历信息：卫星的位置、速度、时间偏差等信息
         sub_ephem = n.subscribe(GNSS_EPHEM_TOPIC, 100, gnss_ephem_callback); // GNSS星历信息
         sub_glo_ephem = n.subscribe(GNSS_GLO_EPHEM_TOPIC, 100, gnss_glo_ephem_callback); // GLO：GLONASS。格洛纳斯星历信息
+        // 卫星的观测信息：GNSS原始测量
         sub_gnss_meas = n.subscribe(GNSS_MEAS_TOPIC, 100, gnss_meas_callback);
+        // 电离层参数订阅：GNSS广播电离层参数
         sub_gnss_iono_params = n.subscribe(GNSS_IONO_PARAMS_TOPIC, 100, gnss_iono_params_callback);
 
-        if (GNSS_LOCAL_ONLINE_SYNC)
+        /*
+         * GNSS和Local坐标系时间差的补偿:
+         * 因为GVINS处理的过程中用到GNSS和VIO的结果，但两者其实是不同空间的产物，也有可能是不同时间的，
+         * 因此，两者之间有时间差“time_diff_gnss_local”很正常，需要进行补偿
+         * 
+         */
+        // GNSS和VIO的时间是否同步判断
+        if (GNSS_LOCAL_ONLINE_SYNC) // 在线同步
         {
             sub_gnss_time_pluse_info = n.subscribe(GNSS_TP_INFO_TOPIC, 100, 
-                gnss_tp_info_callback);
+                gnss_tp_info_callback); // 订阅GNSS脉冲信息
             sub_local_trigger_info = n.subscribe(LOCAL_TRIGGER_INFO_TOPIC, 100, 
-                local_trigger_info_callback);
+                local_trigger_info_callback); // 订阅相机触发时间
         }
         else
         {

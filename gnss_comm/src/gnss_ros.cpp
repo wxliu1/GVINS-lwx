@@ -69,20 +69,29 @@ namespace gnss_comm
         return ephem_msg;
     }
 
+    // 把GNSS ephemeris message 里面的GPS时间转换成更直白的秒数存储到EphemPtr类型的星历结构体智能指针，并返回之。
     EphemPtr msg2ephem(const GnssEphemMsgConstPtr &gnss_ephem_msg)
     {
         EphemPtr ephem(new Ephem());
+        // 观测到的卫星数目
         ephem->sat = gnss_ephem_msg->sat;
+        // 传输时间
         ephem->ttr = gpst2time(gnss_ephem_msg->ttr.week, gnss_ephem_msg->ttr.tow);
+        // 星历参考时间
         ephem->toe = gpst2time(gnss_ephem_msg->toe.week, gnss_ephem_msg->toe.tow);
+        // 时钟校正参考时间
         ephem->toc = gpst2time(gnss_ephem_msg->toc.week, gnss_ephem_msg->toc.tow);
+        //? 在一周内的几秒钟内
         ephem->toe_tow = gnss_ephem_msg->toe_tow;
         ephem->week = gnss_ephem_msg->week;
         ephem->iode = gnss_ephem_msg->iode;
         ephem->iodc = gnss_ephem_msg->iodc;
+        // 卫星健康
         ephem->health = gnss_ephem_msg->health;
         ephem->code = gnss_ephem_msg->code;
+        // 卫星信号精度
         ephem->ura = gnss_ephem_msg->ura;
+        // SV轨道参数
         ephem->A = gnss_ephem_msg->A;
         ephem->e = gnss_ephem_msg->e;
         ephem->i0 = gnss_ephem_msg->i0;
@@ -98,6 +107,7 @@ namespace gnss_comm
         ephem->crs = gnss_ephem_msg->crs;
         ephem->cic = gnss_ephem_msg->cic;
         ephem->cis = gnss_ephem_msg->cis;
+        // SV时钟参数
         ephem->af0 = gnss_ephem_msg->af0;
         ephem->af1 = gnss_ephem_msg->af1;
         ephem->af2 = gnss_ephem_msg->af2;
@@ -143,25 +153,35 @@ namespace gnss_comm
     GloEphemPtr msg2glo_ephem(const GnssGloEphemMsgConstPtr &gnss_glo_ephem_msg)
     {
         GloEphemPtr glo_ephem(new GloEphem());
+        // 卫星数
         glo_ephem->sat = gnss_glo_ephem_msg->sat;
+        // 传输时间
         glo_ephem->ttr = gpst2time(gnss_glo_ephem_msg->ttr.week, gnss_glo_ephem_msg->ttr.tow);
+        // 星历参考时间
         glo_ephem->toe = gpst2time(gnss_glo_ephem_msg->toe.week, gnss_glo_ephem_msg->toe.tow);
+        // 卫星频率
         glo_ephem->freqo = gnss_glo_ephem_msg->freqo;
         glo_ephem->iode = gnss_glo_ephem_msg->iode;
         glo_ephem->health = gnss_glo_ephem_msg->health;
         glo_ephem->age = gnss_glo_ephem_msg->age;
         glo_ephem->ura = gnss_glo_ephem_msg->ura;
+        // 卫星位置，(ecef) (m)
         glo_ephem->pos[0] = gnss_glo_ephem_msg->pos_x;
         glo_ephem->pos[1] = gnss_glo_ephem_msg->pos_y;
         glo_ephem->pos[2] = gnss_glo_ephem_msg->pos_z;
+        // 卫星速度，(ecef) (m/s)
         glo_ephem->vel[0] = gnss_glo_ephem_msg->vel_x;
         glo_ephem->vel[1] = gnss_glo_ephem_msg->vel_y;
         glo_ephem->vel[2] = gnss_glo_ephem_msg->vel_z;
+        // 卫星加速度，(ecef) (m/s^2)
         glo_ephem->acc[0] = gnss_glo_ephem_msg->acc_x;
         glo_ephem->acc[1] = gnss_glo_ephem_msg->acc_y;
         glo_ephem->acc[2] = gnss_glo_ephem_msg->acc_z;
+        // 时钟偏差
         glo_ephem->tau_n = gnss_glo_ephem_msg->tau_n;
+        // 频率偏差
         glo_ephem->gamma = gnss_glo_ephem_msg->gamma;
+        // L1和L2之间的延迟
         glo_ephem->delta_tau_n = gnss_glo_ephem_msg->delta_tau_n;
         return glo_ephem;
     }

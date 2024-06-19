@@ -152,7 +152,9 @@ namespace gnss_comm
     {
         gtime_t t = epoch2time(gpst0);
         if (tow < -1E9 || tow > 1E9) tow = 0.0;
+        // 一天是86400秒，这里是把星期数和剩余的秒数，换算成总秒数
         t.time += 86400*7*week + (int)tow;
+        // 计算秒的小数部分
         t.sec = tow - (int)tow;
         return t;
     }
