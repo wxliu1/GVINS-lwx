@@ -78,6 +78,7 @@ bool GnssPsrDoppFactor::Evaluate(double const *const *parameters, double *residu
     double azel[2] = {0, M_PI/2.0};
     if (P_ecef.norm() > 0)
     {
+        // 计算卫星的方位角/仰角
         sat_azel(P_ecef, sv_pos, azel);
         Eigen::Vector3d rcv_lla = ecef2geo(P_ecef);
         tro_delay = calculate_trop_delay(obs->time, rcv_lla, azel);
@@ -91,18 +92,26 @@ bool GnssPsrDoppFactor::Evaluate(double const *const *parameters, double *residu
     Eigen::Vector3d rcv2sat_ecef = sv_pos - P_ecef;
     Eigen::Vector3d rcv2sat_unit = rcv2sat_ecef.normalized();
 
+    // 关于前缀SV: SV refers to space vehicle. 即航天器;空间飞行器;宇宙飞船;航天飞行器;太空交通工具
+    // SV就是space vehicle，翻译为“空间飞行器”，在GNSS领域，SV指空间中运行的卫星
+    // 作者考虑了萨格纳克效应Sagnac Effect, 受地球自转的影响, 但是新版论文却没有提及。沿用自RTKLIB
     const double psr_sagnac = EARTH_OMG_GPS*(sv_pos(0)*P_ecef(1)-sv_pos(1)*P_ecef(0))/LIGHT_SPEED;
+    // ion_delay和tro_delay用长度单位表示，即已经乘以了光速c
+    // svdt卫星的时钟钟差, rcv_dt接收机时钟钟差，居然也是长度单位，但作者在论文中也没有说明
     double psr_estimated = rcv2sat_ecef.norm() + psr_sagnac + rcv_dt - svdt*LIGHT_SPEED + 
                                 ion_delay + tro_delay + tgd*LIGHT_SPEED;
     
-    // 伪距测量误差
+    // 伪距测量误差：估计值（预测值）减去测量值
     residuals[0] = (psr_estimated - obs->psr[freq_idx]) * pr_weight;
 
     const double dopp_sagnac = EARTH_OMG_GPS/LIGHT_SPEED*(sv_vel(0)*P_ecef(1)+
             sv_pos(0)*V_ecef(1) - sv_vel(1)*P_ecef(0) - sv_pos(1)*V_ecef(0));
+    // 计算预估的多普勒频移，这里其实换成了速度, 并取了负号，所以后面求残差时变成相加。        
     double dopp_estimated = (sv_vel - V_ecef).dot(rcv2sat_unit) + dopp_sagnac + rcv_ddt - svddt*LIGHT_SPEED;
     const double wavelength = LIGHT_SPEED / freq;
     // 多普勒测量误差
+    // obs->dopp[freq_idx]应该表示的是测量到的多普勒频移
+    // 这里实际上把多普勒频移乘以了波长，换算成速度来做误差项
     residuals[1] = (dopp_estimated + obs->dopp[freq_idx]*wavelength) * dp_weight;
 
     if (jacobians)

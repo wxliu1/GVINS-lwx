@@ -963,6 +963,7 @@ void Estimator::optimization()
         std::vector<double> anchor_value;
         for (uint32_t k = 0; k < 7; ++k)
             anchor_value.push_back(para_Pose[0][k]);
+        // TODO: 构造因子和传给残差块的参数都是para_Pose[0]，那计算的残差岂不为0？？？    
         PoseAnchorFactor *pose_anchor_factor = new PoseAnchorFactor(anchor_value);
         problem.AddResidualBlock(pose_anchor_factor, NULL, para_Pose[0]);
         first_optimization = false;
