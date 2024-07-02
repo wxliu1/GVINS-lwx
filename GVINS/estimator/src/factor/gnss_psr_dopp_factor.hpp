@@ -41,6 +41,8 @@ class GnssPsrDoppFactor : public ceres::SizedCostFunction<2, 7, 9, 7, 9, 1, 1, 1
         GnssPsrDoppFactor() = delete;
         GnssPsrDoppFactor(const ObsPtr &_obs, const EphemBasePtr &_ephem, std::vector<double> &_iono_paras, 
             const double _ratio);
+        virtual bool Evaluate1(double const *const *parameters, double *residuals, double **jacobians) const;
+        // 使用symbolic expression
         virtual bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const;
         bool check_gradients(const std::vector<const double*> &parameters) const;
     private:

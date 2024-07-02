@@ -1,19 +1,15 @@
-
-# created by wxliu on 2024-6-19
-
-import symforce.symbolic as sf
 import symforce
 symforce.set_epsilon_to_symbol()
 
-import numpy as np
+from symforce import typing as T # 导入symforce包里面的typing模块到当前模块的命名空间，并重命名为T
 
-# from symforce import codegen
-# from symforce.codegen import values_codegen
-# from symforce.values import Values
+from symforce import codegen
 
-FOCAL_LENGTH: double = 460.0
-# sqrt_info: sf.M22 = FOCAL_LENGTH / 1.5 * sf.Matrix22.eye()
-sqrt_info: sf.M22 = FOCAL_LENGTH / 1.5 * sf.I22(2, 2)
+import symforce.symbolic as sf
+from symforce.notebook_util import display
+
+import shutil
+from pathlib import Path
 
 M_PI = 3.14159265358979323846
 LIGHT_SPEED = 2.99792458e8
@@ -25,84 +21,6 @@ EARTH_OMG_GPS = 7.2921151467e-5
 relative_sqrt_info = 10.0
 PSR_TO_DOPP_RATIO = 5
 
-
-# imu残差：15维
-def imu_residual(
-    Pi: sf.V3,
-    Qi: sf.Rot3, # sf.Quaternion
-    Vi: sf.V3,
-    Bai: sf.V3,
-    Bgi: sf.V3,
-    Pj: sf.V3,
-    Qj: sf.Rot3,
-    Vj: sf.V3,
-    Baj: sf.V3,
-    Bgj: sf.V3,
-    corrected_delta_p: sf.V3,
-    corrected_delta_q: sf.Quaternion,
-    corrected_delta_v: sf.V3,
-    G: sf.V3, # gravity
-    sum_dt: sf.Scalar
-) -> sf.sf.Matrix:
-    r_p = Qi.inverse() * (0.5 * G * sum_dt * sum_dt + Pj - Pi - Vi * sum_dt) - corrected_delta_p
-    r_q = 2 * (corrected_delta_q.inverse() * (Qi.inverse() * Qj)).xyz
-    r_v = Qi.inverse() * (G * sum_dt + Vj - Vi) - corrected_delta_v
-    r_ba = Baj - Bai
-    r_bg = Bgj - Bgi
-
-    return sf.Matrix.block_matrix([[r_p], [r_q], [r_v], [r_ba], [r_bg]])
-
-# 重投影残差：2维
- def projection_residual(
-    pts_i: sf.V3,
-    pts_j: sf.V3,
-    Pi: sf.V3,
-    Qi: sf.Rot3,
-    Pj: sf.V3,
-    Qj: sf.Rot3,
-    tic: sf.V3,
-    qic: sf.Rot3,
-    inv_dep_i: sf.Scalar,
-    #sqrt_info: sf.M22,
-    epsilon: sf.Scalar
- ) -> sf.V2:
-    # pts_camera_i = pts_i / inv_dep_i
-    pts_camera_i = pts_i / (inv_dep_i + epsilon)
-    pts_imu_i = qic * pts_camera_i + tic
-    pts_w = Qi * pts_imu_i + Pi
-    pts_imu_j = Qj.inverse() * (pts_w - Pj)
-    pts_camera_j = qic.inverse() * (pts_imu_j - tic)
-
-    # 求归一化平面的重投影误差
-    # dep_j = pts_camera_j.z
-    # residual = (pts_camera_j / dep_j).head<2>() - pts_j.head<2>()
-    pts_camera_j_Normalized = pts_camera_j / (pts_camera_j.z + epsilon)
-    r_x = pts_camera_j_Normalized.x - pts_j.x
-    r_y = pts_camera_j_Normalized.y - pts_j.y
-    residual = sf.V2(r_x, r_y)
-    residual = sqrt_info * residual
-
-    return residual
-
-# anchor point 位姿残差：6维
-def anchor_pose_residual(
-    curr_p: sf.V3,
-    curr_q: sf.Rot3,
-    anchor_p: sf.V3,
-    anchor_q: sf.Rot3
-) -> sf.V6:
-    r_p = curr_p - anchor_p
-    r_q = 2.0 * (curr_q * anchor_q.inverse()).xyz
-    residual = sf.Matrix.block_matrix([[r_p], [r_q]])
-
-    return residual
-
-# # simplified gnss psr dopp residual: 2维
-# def gnss_psr_dopp_residual2(
-#     psr_estimated: sf.Scalar,
-#     psr_measured: sf.scalar,
-
-# )
 
 # ecef2rotation：根据anchor point的坐标计算ENU系到ECEF系的旋转
 from symengine import atan
@@ -145,7 +63,7 @@ def ecef2geo(xyz: sf.V3, epsilon: sf.Scalar = 0.0) -> sf.V3:
     N = a2 * sf.Pow((a2 * cos_lat * cos_lat + b2 * sin_lat * sin_lat), -0.5)
     altM = p / (cos_lat + epsilon) - N
 
-    lon = sf.atan2(xyz.y(), xyz.x(), epsilon=epsilon)
+    lon = sf.atan2(xyz.y, xyz.x, epsilon=epsilon)
     lon_deg = lon * R2D
     lla = sf.V3(lat_deg, lon_deg, altM)
     return lla
@@ -174,7 +92,7 @@ def ecef2enu(ref_lla: sf.V3, v_ecef: sf.V3) -> sf.V3:
     cos_lat = sf.cos(lat)
     sin_lon = sf.sin(lon)
     cos_lon = sf.cos(lon)
-    Eigen::Matrix3d R_enu_ecef
+
     R_enu_ecef = sf.Matrix33(-sin_lon,             cos_lon,         0, \
                              -sin_lat*cos_lon, -sin_lat*sin_lon, cos_lat, \
                              cos_lat*cos_lon,  cos_lat*sin_lon, sin_lat)
@@ -197,52 +115,6 @@ def sat_azel(rev_pos: sf.V3, sat_pos: sf.V3, epsilon: sf.Scalar = 0) -> sf.V2:
     elevation = sf.asin(rev2sat_enu.z)
 
     return sf.V2(azimuth, elevation)
-
-def calculate_trop_delay(
-    doy: sf.Scalar,
-    rcv_lla: sf.V3,
-    azel: sf.V2,
-    epsilon: sf.Scalar
-) -> sf.Scalar:
-    # compute tropospheric delay by standard atmosphere and saastamoinen model
-    temp0=15.0
-    humi =0.7
-    # rev_lla.z()<0.0?0.0:rev_lla.z()
-    #  (z <= 3) ? a : b  --> a + max(sign(z − 3), 0)(b − a)
-    hgt = 0.0 + sf.Max(sf.sign(rev_lla.z - 0.0), 0) * (rev_lla.z - 0.0)
-    pres=1013.25 * sf.Pow(1.0-2.2557E-5*hgt,5.2568)
-    temp=temp0-6.5E-3*hgt+273.16
-    e=6.108*humi*exp((17.15*temp-4684.0)/(temp-38.45))
-
-    zhd=0.0022768*pres/(1.0-0.00266*cos(2.0*rev_lla.x*D2R)-0.00028*hgt/1E3)
-    zwd=0.002277*(1255.0/temp+0.05)*e
-
-    mapfh = 0.0
-    mapfw = 0.0
-    # nmf
-    coef = np.array([
-        [ 1.2769934E-3, 1.2683230E-3, 1.2465397E-3, 1.2196049E-3, 1.2045996E-3],
-        [ 2.9153695E-3, 2.9152299E-3, 2.9288445E-3, 2.9022565E-3, 2.9024912E-3],
-        [ 62.610505E-3, 62.837393E-3, 63.721774E-3, 63.824265E-3, 64.258455E-3],
-           
-        [ 0.0000000E-0, 1.2709626E-5, 2.6523662E-5, 3.4000452E-5, 4.1202191E-5],
-        [ 0.0000000E-0, 2.1414979E-5, 3.0160779E-5, 7.2562722E-5, 11.723375E-5],
-        [ 0.0000000E-0, 9.0128400E-5, 4.3497037E-5, 84.795348E-5, 170.37206E-5],
-          
-        [ 5.8021897E-4, 5.6794847E-4, 5.8118019E-4, 5.9727542E-4, 6.1641693E-4],
-        [ 1.4275268E-3, 1.5138625E-3, 1.4572752E-3, 1.5007428E-3, 1.7599082E-3],
-        [ 4.3472961E-2, 4.6729510E-2, 4.3908931E-2, 4.4626982E-2, 5.4736038E-2]
-    ])
-    aht = np.array([ 2.53E-5, 5.49E-3, 1.14E-3])
-    # if el<=0.0:
-
-    # (lat<0.0?0.5:0.0) --> 0.5 + sf.Max(sf.sign(lat - 0.0), 0) * (0.0 - 0.5)
-    # lat>=0.0?0.0:0.5 --> 0.5 + sf.Max(sf.sign(lat - 0.0), 0) * (0.0 - 0.5)
-    y=(doy-28.0)/365.25+(0.5 + sf.Max(sf.sign(lat + epsilon - 0.0), 0) * (0.0 - 0.5))
-
-    cosy=sf.cos(2.0*M_PI*y)
-    lat=sf.Abs(lat)
-    # TODO
 
 
 # gnss psr dopp residual: 2维
@@ -272,6 +144,8 @@ def gnss_psr_dopp_residual(
     dopp_measured: sf.Scalar, # observation data doppler frequency (Hz)
     pr_uura: sf.Scalar,
     dp_uura: sf.Scalar,
+    pr_weight: sf.Scalar, # newly add
+    dp_weight: sf.Scalar, # newly add
     epsilon: sf.Scalar = 0
 ) -> sf.V2:
     # construct residuals here.
@@ -288,17 +162,19 @@ def gnss_psr_dopp_residual(
     P_ecef = R_ecef_local * local_pos + ref_ecef
     V_ecef = R_ecef_local * local_vel
 
+    # tmp comment
     # 计算卫星的方位角/仰角
-    azel = sat_azel(P_ecef, sv_pos, epsilon)
-    rcv_lla = ecef2geo(P_ecef)
+    # azel = sat_azel(P_ecef, sv_pos, epsilon)
+    # rcv_lla = ecef2geo(P_ecef)
     # TODO: 
     # tro_delay = calculate_trop_delay(obs->time, rcv_lla, azel)
     # ion_delay = calculate_ion_delay(obs->time, iono_paras, rcv_lla, azel)
 
-    sin_el = sf.sin(azel.y)
-    sin_el_2 = sin_el*sin_el
-    pr_weight = sin_el_2 / pr_uura * relative_sqrt_info
-    dp_weight = sin_el_2 / dp_uura * relative_sqrt_info * PSR_TO_DOPP_RATIO
+    # sin_el = sf.sin(azel.y)
+    # sin_el_2 = sin_el*sin_el
+    # pr_weight = sin_el_2 / pr_uura * relative_sqrt_info
+    # dp_weight = sin_el_2 / dp_uura * relative_sqrt_info * PSR_TO_DOPP_RATIO
+    # the end.
 
     rcv2sat_ecef = sv_pos - P_ecef
     rcv2sat_unit = rcv2sat_ecef.normalized()
@@ -316,6 +192,87 @@ def gnss_psr_dopp_residual(
     # dopp_measured = obs->dopp[freq_idx]
     r_doppler = (dopp_estimated + dopp_measured * wavelength) * dp_weight
 
+
     return sf.V2(r_pseudorange, r_doppler)
 
-# 
+
+
+ # for gnss
+def generate_gnss_residual_code(
+    output_dir: T.Optional[Path] = None, print_code: bool = False
+) -> None:
+    gnss_codegen = codegen.Codegen.function(
+        func=gnss_psr_dopp_residual,
+        config=codegen.CppConfig(),
+    )
+
+    gnss_data = gnss_codegen.generate_function(output_dir)
+
+    gnss_codegen_with_linearization = gnss_codegen.with_linearization(which_args=["Pi", "Vi", "Pj", "Vj", "rcv_dt", "rcv_ddt", "yaw_diff", "ref_ecef"])
+
+    # 生成构建因子图的函数
+    # Generate the function and print the code
+    metadata = gnss_codegen_with_linearization.generate_function(
+        output_dir=output_dir, skip_directory_nesting=False
+    )
+
+
+output_dir="/root/dev/python_ws/test_sym"
+
+generate_gnss_residual_code(output_dir)
+
+
+# for test
+
+def calc_p_ecef(
+    # states:
+    Pi: sf.V3,
+    Vi: sf.V3,
+    Pj: sf.V3,
+    Vj: sf.V3,
+    rcv_dt: sf.Scalar,
+    rcv_ddt: sf.Scalar,
+    yaw_diff: sf.Scalar,
+    ref_ecef: sf.V3,
+    # ?
+    # ion_delay: sf.Scalar, # uncomment it
+    # tro_delay: sf.Scalar, # uncomment it
+
+    # precomputed:
+    ratio: sf.Scalar,
+    # tgd: sf.Scalar,
+    # sv_pos: sf.V3,
+    # sv_vel: sf.V3,
+    # svdt: sf.Scalar,
+    # svddt: sf.Scalar,
+    # freq: sf.Scalar,
+    # psr_measured: sf.Scalar, # observation data pseudorange (m)
+    # dopp_measured: sf.Scalar, # observation data doppler frequency (Hz)
+    # pr_uura: sf.Scalar,
+    # dp_uura: sf.Scalar,
+    # pr_weight: sf.Scalar, # newly add
+    # dp_weight: sf.Scalar, # newly add
+    epsilon: sf.Scalar = 0
+) -> sf.V3:
+    # construct residuals here.
+    local_pos = ratio * Pi + (1.0 - ratio) * Pj
+    local_vel = ratio * Vi + (1.0 - ratio) * Vj
+    sin_yaw_diff = sf.sin(yaw_diff)
+    cos_yaw_diff = sf.cos(yaw_diff)
+    R_enu_local = sf.Matrix33(cos_yaw_diff, -sin_yaw_diff, 0, \
+                              sin_yaw_diff, cos_yaw_diff, 0, \
+                              0, 0, 1)
+    # 计算地心地固坐标系下的位置和速度
+    R_ecef_enu = ecef2rotation(ref_ecef, epsilon)
+    R_ecef_local = R_ecef_enu * R_enu_local
+    P_ecef = R_ecef_local * local_pos + ref_ecef
+    return P_ecef
+
+
+calc_p_ecef_codegen = codegen.Codegen.function(
+    func=calc_p_ecef,
+    config=codegen.CppConfig(),
+)
+# calc_p_ecef_data = calc_p_ecef_codegen.generate_function(output_dir)
+
+display(sf.numeric_epsilon)
