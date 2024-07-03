@@ -1,3 +1,5 @@
+# 利用Symbolic expressions来构建GNSS残差，最后通过Codegen类生成C++的残差函数和线性化的因子
+
 import symforce
 symforce.set_epsilon_to_symbol()
 
