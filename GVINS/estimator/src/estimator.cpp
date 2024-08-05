@@ -574,6 +574,7 @@ bool Estimator::visualInitialAlign()
 }
 
 // @brief GNSS和VIO进行联合优化，在VIO初始化完成之后
+// 初始化完成后，得到dt, ddt, anc_ecef, yaw_enu_local的初值
 bool Estimator::GNSSVIAlign()
 {
     // Step 1：根据系统当前状态和GNSS观测数据量，判断是否能够进行GNSS和VIO的对齐
